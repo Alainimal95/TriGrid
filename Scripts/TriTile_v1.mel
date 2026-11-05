@@ -1,0 +1,316 @@
+//User input
+proc string[] user()
+    {
+    //capture user input
+        //tiling mode
+        string $mode = `confirmDialog
+                       -t "Tiling Mode"
+                       -m "How would you like the grid to build itself?"
+                       -b "Subdivision"
+                       -b "Rows and Columns"`;
+    
+        //iterations
+        string $modeID;
+        string $iterations[];
+        
+        //string $result;
+        if ("Subdivision" == $mode)
+            {
+            //mode ID
+            $modeID = 1;
+            
+            //iterations
+            promptDialog
+                       -t "Iterations"
+                       -st "integer";
+
+            $iterations[0] = `promptDialog -query -text`;
+            $iterations[1] = "-1";
+            }
+        else
+            {
+            //mode ID
+            $modeID = 2;
+            
+            //horizontal
+            string $horiz;
+                       promptDialog
+                       -t "Iterations"
+                       -m "Horizontal"
+                       -st "integer";
+
+            $horiz = `promptDialog -query -text`;
+        
+            //vertical
+            string $vert;
+                       promptDialog
+                       -t "Iterations"
+                       -m "Vertical"
+                       -st "integer";
+            
+            $vert = `promptDialog -query -text`;
+            
+            $iterations[0] = $horiz;
+            $iterations[1] = $vert;
+        };
+        
+    //Return iterations
+    return {$modeID, $iterations[0], $iterations[1]};
+    };
+
+////////////////////////////////////////////////////////////////////
+
+//Measure
+//measure the width/height of the grid
+proc float[] measure (string $target[])
+    {
+    //capture bounds
+    float $gridBounds[] = `exactWorldBoundingBox $target[0]`;
+    
+    //define width and height
+    float $width = ($gridBounds[3]-$gridBounds[0]);
+    float $height = ($gridBounds[5]-$gridBounds[2]);
+    
+    //return measurements
+    return {$width, $height};
+
+    };
+
+//////////////////////////////////////////////////////////////////////////////////////////////////
+
+//triCell
+//creates a single triangle and aligns a corner to world 0
+
+proc string[] triCell()
+    {
+    //create a grid of four triangles from world 0
+    string $cell[] = `polyDisc -sides 3 -subdivisionMode 1 -subdivisions 1 -radius 1`;
+    setAttr ($cell[1]+".heightBaseline") 1;
+
+    //align it so that one of its base verticies is at world 0
+        //measure width [0] and height [1]
+        float $measure[] = `measure $cell`;
+
+        //move grid
+        move -r ($measure[0]/2) 0 (-1*$measure[1]) $cell;
+    
+    //return shape
+    return $cell;
+    };
+
+//////////////////////////////////////////////////////////////////////////////////////////////
+
+//TriTile
+//sets the tile used based on the mode given
+proc string[] triTile(int $mode)
+    {
+    string $triTile[];
+        
+    //input mode determines construction of triangles
+        //0 - single triangle
+        //1 - 1x subdivision (grid of four triangles)
+        //2 - 2 adjacent tris (paralellogram)
+    
+    if (0==$mode)
+        {
+        //creates triangle
+        $triTile = `polyDisc -sides 3 -subdivisions 0 -radius 1`;
+        setAttr ($triTile[1]+".heightBaseline") 1;
+
+        //align it so that one of its base verticies is at world 0
+            //measure width [0] and height [1]
+            float $measure[] = `measure $triTile`;
+
+            //move triangle
+            move -r ($measure[0]/2) 0 (-1*$measure[1]) $triTile;
+        }
+   
+    else if (1==$mode)
+        {
+        //create a grid of four triangles from world 0
+        $triTile = `triCell`;
+        }
+    
+    else
+        {
+        //make two adjacent triangles
+            //make four triangle grid
+            $triTile = `triCell`;
+            
+            //delete two faces
+            delete {($triTile[0] + ".f[1]"), ($triTile[0] + ".f[3]")};
+        
+        };
+    //return shape
+    return $triTile;
+};
+
+
+//////////////////////////////////////////////////////////////////////////////////////////////////////
+//TriGrid
+//capture user input (0 = mode, 1 = iterations(exp/horisontal), 2 = iterations(vertical)
+    string $user[] = `user`;
+    
+    //set up variables 
+    int $mode = $user[0];
+    int $iterationH = $user[1];
+    int $iterationV = $user[2]; 
+    string $tile[];
+    float $size[];
+    string $grid[];
+    
+//generate grid based on iterations and tiling mode
+    //object at start of loop
+    string $start[];
+    
+    //object at end of loop
+    string $end[];    
+    
+    //mode 1 = expansion mode
+    if (1==$mode)
+        {
+        //faces
+        string $right[];
+        string $top[];
+        string $mid[];
+        
+        //Measure
+        $tile = `triTile $mode`;
+        $size = `measure $tile`;
+        
+        //loop
+        for ($i = 1; $i <= ($iterationH + 1); $i++)
+            {
+            //starting tile
+            if (1==$i)
+                {
+                //Starting shape
+                $end = `triTile $mode`;
+                
+                //set pivot to bottom left corner
+                xform -a -ws -piv 0 0 0 $end;
+                
+                //start next loop
+                continue;
+                }
+
+            else
+                {
+                
+                //set previous ending shape as current (start) shape
+                $start = $end;            
+                
+                //Duplicate
+                $right = `duplicate $start`;
+                $top = `duplicate $start`;
+                $mid = `duplicate $start`;
+            
+            
+                //Move/rotate into position
+                move -r -ws $size[0] 0 0 $right;
+                move -r -ws (0.5*$size[0]) 0 (-1*$size[1]) $top;
+                rotate -r -ws 0 60 0 $mid;
+                move -r -ws $size[0] 0 0 $mid; 
+                        
+                //combine
+                $end = `polyUnite -ch 0 $start $right $top $mid`;
+                    
+                //merge verts
+                polyMergeVertex -d 0 $end;
+                
+                //set pivot to bottom left corner
+                xform -a -ws -piv 0 0 0 $end;
+                
+                //Half scale
+                scale -r .5 1 .5 $end;
+                };
+            };
+        //delete construction history and finalize grid
+        delete -ch $end;
+        $grid = $end;
+        }    
+    
+    //mode 2 = rows and columns
+    else
+        {
+        //setup
+        string $dual[];
+        string $row[];
+        
+        //Measure
+        $tile = `triTile 0`;
+        scale -r .5 1 .5 $tile;
+        $size = `measure $tile`;
+        
+        //horizontal iterations
+        for ($i = 1; $i <= ($iterationH); $i++)
+            {
+            if (1==$i)
+                {
+                //Starting shape
+                $end = `triTile $mode`;
+                
+                //set pivot to bottom left corner
+                xform -a -ws -piv 0 0 0 $end;
+                
+                //start next loop
+                continue;
+                }
+            else
+                {
+                //set previous ending shape as current (start) shape
+                $start = $end;            
+                
+                //add new tile to end
+                $dual = `triTile 2`;
+                move -r -ws ($size[0]*($i-1))0 0 $dual;
+                
+                //combine shapes
+                $end = `polyUnite -ch 0 $end $dual`;
+                
+                //merge verts
+                polyMergeVertex -d 0 $end;
+                }
+                        
+            };
+        //delete construction history and add first row to grid
+        delete -ch $end;
+        $grid = `duplicate $end`;
+        
+        //vertical iterations
+        for ($i = 1; $i < $iterationV; $i++)
+            //odd numbered pass (row is even)
+            if (1==$i%2)
+                {
+                //add new row and set pivot
+                $row = `duplicate $end`;
+                
+                //flip reverse normals and move into position
+                scale -r -ws 1 1 -1 $row;
+                polyNormal -n 0 -unm 1 -ch 1 $row;
+                move -r -ws 0 0 ($size[1]*($i+1)*-1) $row;
+                
+                //combine shapes
+                $grid = `polyUnite -ch 0 $grid $row`;
+
+                //merge verts
+                polyMergeVertex -d 0 $grid;
+                }
+            //even numbered pass (row is odd)
+            else
+                {
+                //add new row 2 rows up
+                $row = `duplicate $end`;
+                move -r -ws 0 0 ($size[1]*$i*-1) $row;
+                
+                //combine shapes
+                $grid = `polyUnite -ch 0 $grid $row`;
+
+                //merge verts
+                polyMergeVertex -d 0 $grid;
+                }
+        };
+    rename $grid "triGrid";
+    
+    //delete measurement tile
+    delete $tile $end;
